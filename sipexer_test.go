@@ -493,3 +493,19 @@ func TestSplitSIPMessages(t *testing.T) {
 		t.Fatalf("unexpected split result")
 	}
 }
+
+func TestSelectDigestAuthParamsUsesFirstHeader(t *testing.T) {
+	msg := sgsip.SGSIPMessage{
+		Headers: []sgsip.SGSIPHeader{
+			{Name: "WWW-Authenticate", Body: `Digest realm="127.0.0.1", nonce="n1", qop="auth", algorithm=MD5`},
+			{Name: "WWW-Authenticate", Body: `Digest realm="127.0.0.1", nonce="n1", qop="auth", algorithm=SHA-256`},
+		},
+	}
+	got := SIPExerSelectDigestAuthParams(&msg, "WWW-Authenticate")
+	if got == nil {
+		t.Fatalf("expected auth params, got nil")
+	}
+	if got["algorithm"] != "MD5" {
+		t.Fatalf("expected first auth header to be selected, got: %q", got["algorithm"])
+	}
+}
