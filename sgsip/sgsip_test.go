@@ -429,3 +429,13 @@ func TestMessageToResponseStringInviteRecordRoute(t *testing.T) {
 		})
 	}
 }
+
+func TestHeaderParseDigestAuthBodyCaseInsensitiveScheme(t *testing.T) {
+	params := SGSIPHeaderParseDigestAuthBody(`digest realm="example.com", nonce="abc", algorithm=SHA-256`)
+	if params == nil {
+		t.Fatalf("expected digest auth params map, got nil")
+	}
+	if params["realm"] != "example.com" || params["nonce"] != "abc" || params["algorithm"] != "SHA-256" {
+		t.Fatalf("unexpected parsed params: %#v", params)
+	}
+}
