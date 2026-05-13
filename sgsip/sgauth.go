@@ -94,12 +94,13 @@ func SGAuthGetNC(vNC int) string {
 func SGAuthBuildResponseBody(username string, password string, ha1mode bool, hparams map[string]string) (string, error) {
 	// https://en.wikipedia.org/wiki/Digest_access_authentication
 
-	vAlg, ok := hparams["algorithm"]
+	vAlgHdr, ok := hparams["algorithm"]
 	if !ok {
-		vAlg = "MD5"
+		vAlgHdr = "MD5"
 	}
+	vAlg := vAlgHdr
 	vSess := false
-	if strings.HasSuffix(vAlg, "-sess") {
+	if strings.HasSuffix(strings.ToLower(vAlg), "-sess") {
 		vAlg = strings.TrimSuffix(vAlg, "-sess")
 		vSess = true
 	}
@@ -107,7 +108,23 @@ func SGAuthBuildResponseBody(username string, password string, ha1mode bool, hpa
 	if !ok {
 		vQop = "none"
 	} else {
-		vQop = strings.ToLower(vQop)
+		vQop = strings.ToLower(strings.TrimSpace(vQop))
+		if strings.Contains(vQop, ",") {
+			// Server can advertise multiple qop values (e.g. "auth,auth-int").
+			// Pick the first supported value, preferring auth then auth-int.
+			qopList := strings.Split(vQop, ",")
+			vQop = "none"
+			for _, qv := range qopList {
+				qv = strings.TrimSpace(qv)
+				if qv == "auth" {
+					vQop = "auth"
+					break
+				}
+				if qv == "auth-int" && vQop != "auth" {
+					vQop = "auth-int"
+				}
+			}
+		}
 	}
 	if vQop != "none" && vQop != "auth" && vQop != "auth-int" {
 		return "", fmt.Errorf("unsupported qop value: %s", vQop)
@@ -132,8 +149,8 @@ func SGAuthBuildResponseBody(username string, password string, ha1mode bool, hpa
 		// build digest response
 		response := SGHashX(vAlg, sHA1+":"+hparams["nonce"]+":"+sHA2)
 		// build header body
-		AuthHeader = fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", algorithm=MD5, response="%s"`,
-			username, hparams["realm"], hparams["nonce"], hparams["uri"], response)
+		AuthHeader = fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", algorithm=%s, response="%s"`,
+			username, hparams["realm"], hparams["nonce"], hparams["uri"], vAlgHdr, response)
 	} else {
 		if vQop == "auth" {
 			sHA2 = SGHashX(vAlg, hparams["method"]+":"+hparams["uri"])
@@ -149,10 +166,10 @@ func SGAuthBuildResponseBody(username string, password string, ha1mode bool, hpa
 			cnonce = SGCreateClientNonce(6)
 		}
 		nc := SGAuthGetNC(1)
-		response := SGHashX(vAlg, sHA1+":"+hparams["nonce"]+":"+nc+":"+cnonce+":"+hparams["qop"]+":"+sHA2)
+		response := SGHashX(vAlg, sHA1+":"+hparams["nonce"]+":"+nc+":"+cnonce+":"+vQop+":"+sHA2)
 		// build header body
 		AuthHeader = fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", cnonce="%s", nc=%s, qop=%s, opaque="%s", algorithm=%s, response="%s"`,
-			username, hparams["realm"], hparams["nonce"], hparams["uri"], cnonce, nc, hparams["qop"], hparams["opaque"], vAlg, response)
+			username, hparams["realm"], hparams["nonce"], hparams["uri"], cnonce, nc, vQop, hparams["opaque"], vAlgHdr, response)
 	}
 	return AuthHeader, nil
 }
