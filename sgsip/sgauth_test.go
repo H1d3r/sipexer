@@ -129,6 +129,39 @@ func TestSGAuthBuildResponseBody(t *testing.T) {
 	if !strings.Contains(body, `response="`) {
 		t.Fatalf("missing response in ha1mode body: %s", body)
 	}
+
+	// no qop and SHA-256 must preserve algorithm in auth header
+	hparams = map[string]string{
+		"algorithm": "SHA-256",
+		"realm":     "example.com",
+		"nonce":     "n123",
+		"uri":       "sip:example.com",
+		"method":    "REGISTER",
+	}
+	body, err = SGAuthBuildResponseBody("alice", "secret", false, hparams)
+	if err != nil {
+		t.Fatalf("unexpected no-qop sha-256 error: %v", err)
+	}
+	if !strings.Contains(body, `algorithm=SHA-256`) {
+		t.Fatalf("expected SHA-256 algorithm for no-qop digest, got: %s", body)
+	}
+
+	// qop value list should select auth
+	hparams = map[string]string{
+		"algorithm": "SHA-256",
+		"realm":     "example.com",
+		"nonce":     "n123",
+		"uri":       "sip:example.com",
+		"method":    "REGISTER",
+		"qop":       "auth,auth-int",
+	}
+	body, err = SGAuthBuildResponseBody("alice", "secret", false, hparams)
+	if err != nil {
+		t.Fatalf("unexpected qop-list error: %v", err)
+	}
+	if !strings.Contains(body, `qop=auth`) {
+		t.Fatalf("expected qop=auth for qop list, got: %s", body)
+	}
 }
 
 func TestAKAUtilityFunctions(t *testing.T) {
@@ -301,4 +334,3 @@ func TestSGAKAHandleChallenge(t *testing.T) {
 		t.Fatalf("expected invalid key error")
 	}
 }
-
