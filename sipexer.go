@@ -991,6 +991,19 @@ func SIPExerEnsureViaAlias(tplfields map[string]any) {
 	tplfields["viaparams"] = vparams + ";alias"
 }
 
+func SIPExerSelectDigestAuthParams(sipRes *sgsip.SGSIPMessage, hname string) map[string]string {
+	for _, h := range sipRes.Headers {
+		if !strings.EqualFold(h.Name, hname) {
+			continue
+		}
+		params := sgsip.SGSIPHeaderParseDigestAuthBody(h.Body)
+		if params != nil {
+			return params
+		}
+	}
+	return nil
+}
+
 type SIPExerRuntimeState struct {
 	cli              CLIOptions
 	paramFields      paramFieldsType
@@ -1921,22 +1934,19 @@ func SIPExerProcessResponse(msgVal *sgsip.SGSIPMessage, rmsg []byte, sipRes *sgs
 		if len(cliops.authapassword) == 0 && len(cliops.akakey) == 0 {
 			return sipRes.FLine.Code
 		}
-		var hbody string = ""
+		hparams := map[string]string(nil)
 		if sipRes.FLine.Code == 401 {
-			if sgsip.SGSIPMessageHeaderGet(sipRes, "WWW-Authenticate", &hbody) != sgsip.SGSIPRetOK {
+			hparams = SIPExerSelectDigestAuthParams(sipRes, "WWW-Authenticate")
+			if hparams == nil {
 				SIPExerPrintf(SIPExerLogError, "failed to get WWW-Authenticate\n")
 				return SIPExerErrHeaderAuthGet
 			}
 		} else {
-			if sgsip.SGSIPMessageHeaderGet(sipRes, "Proxy-Authenticate", &hbody) != sgsip.SGSIPRetOK {
+			hparams = SIPExerSelectDigestAuthParams(sipRes, "Proxy-Authenticate")
+			if hparams == nil {
 				SIPExerPrintf(SIPExerLogError, "failed to get Proxy-Authenticate\n")
 				return SIPExerErrHeaderAuthGet
 			}
-		}
-		hparams := sgsip.SGSIPHeaderParseDigestAuthBody(hbody)
-		if hparams == nil {
-			SIPExerPrintf(SIPExerLogError, "failed to parse WWW/Proxy-Authenticate\n")
-			return SIPExerErrHeaderAuthParse
 		}
 		s := strings.SplitN(*smsg, " ", 3)
 		if len(s) != 3 {
