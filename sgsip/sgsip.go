@@ -902,7 +902,7 @@ func SGSIPMessageHeaderSet(msgVal *SGSIPMessage, hname string, hbody string) int
 func SGSIPMessageHeaderGet(msgVal *SGSIPMessage, hname string, hbody *string) int {
 	htype := SGSIPHeaderGetType(hname)
 	for i, hdr := range msgVal.Headers {
-		if (htype != HeaderTypeOther && htype == hdr.HType) || (hdr.Name == hname) {
+		if (htype != HeaderTypeOther && htype == hdr.HType) || strings.EqualFold(hdr.Name, hname) {
 			*hbody = msgVal.Headers[i].Body
 			return SGSIPRetOK
 		}
