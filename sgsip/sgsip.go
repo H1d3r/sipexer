@@ -745,7 +745,7 @@ func SGSIPHeaderValidName(name string) bool {
 // Return a map of parameters or nil if the header is not Digest auth header.
 func SGSIPHeaderParseDigestAuthBody(hbody string) map[string]string {
 	s := strings.SplitN(strings.Trim(hbody, " "), " ", 2)
-	if len(s) != 2 || s[0] != "Digest" {
+	if len(s) != 2 || strings.ToLower(s[0]) != "digest" {
 		return nil
 	}
 
