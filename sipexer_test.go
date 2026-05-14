@@ -501,11 +501,34 @@ func TestSelectDigestAuthParamsUsesFirstHeader(t *testing.T) {
 			{Name: "WWW-Authenticate", Body: `Digest realm="127.0.0.1", nonce="n1", qop="auth", algorithm=SHA-256`},
 		},
 	}
-	got := SIPExerSelectDigestAuthParams(&msg, "WWW-Authenticate")
+	got := SIPExerSelectDigestAuthParams(&msg, "WWW-Authenticate", "first")
 	if got == nil {
 		t.Fatalf("expected auth params, got nil")
 	}
 	if got["algorithm"] != "MD5" {
 		t.Fatalf("expected first auth header to be selected, got: %q", got["algorithm"])
+	}
+}
+
+func TestSelectDigestAuthParamsModes(t *testing.T) {
+	msg := sgsip.SGSIPMessage{
+		Headers: []sgsip.SGSIPHeader{
+			{Name: "WWW-Authenticate", Body: `Digest realm="127.0.0.1", nonce="n1", qop="auth", algorithm=MD5`},
+			{Name: "WWW-Authenticate", Body: `Digest realm="127.0.0.1", nonce="n1", qop="auth", algorithm=SHA-256`},
+			{Name: "WWW-Authenticate", Body: `Digest realm="127.0.0.1", nonce="n1", qop="auth", algorithm=SHA-512-256`},
+		},
+	}
+
+	if got := SIPExerSelectDigestAuthParams(&msg, "WWW-Authenticate", "last"); got == nil || got["algorithm"] != "SHA-512-256" {
+		t.Fatalf("expected last challenge to be selected, got: %#v", got)
+	}
+	if got := SIPExerSelectDigestAuthParams(&msg, "WWW-Authenticate", "strong"); got == nil || got["algorithm"] != "SHA-512-256" {
+		t.Fatalf("expected strongest challenge to be selected, got: %#v", got)
+	}
+	if got := SIPExerSelectDigestAuthParams(&msg, "WWW-Authenticate", "SHA-256"); got == nil || got["algorithm"] != "SHA-256" {
+		t.Fatalf("expected explicit SHA-256 match to be selected, got: %#v", got)
+	}
+	if got := SIPExerSelectDigestAuthParams(&msg, "WWW-Authenticate", "SHA-1"); got != nil {
+		t.Fatalf("expected nil for non-existing requested algorithm, got: %#v", got)
 	}
 }
