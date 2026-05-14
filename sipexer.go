@@ -347,6 +347,7 @@ type CLIOptions struct {
 	wsproto          string
 	authuser         string
 	authapassword    string
+	authalg          string
 	noval            string
 	contacturi       string
 	contactbuild     bool
@@ -428,6 +429,7 @@ var cliops = CLIOptions{
 	wsproto:          "sip",
 	authuser:         "",
 	authapassword:    "",
+	authalg:          "first",
 	noval:            "no",
 	contacturi:       "",
 	contactbuild:     false,
@@ -561,6 +563,7 @@ func init() {
 	}
 	flag.StringVar(&cliops.authapassword, "ap", cliops.authapassword, "authentication password")
 	flag.StringVar(&cliops.authapassword, "auth-password", cliops.authapassword, "authentication password")
+	flag.StringVar(&cliops.authalg, "auth-alg", cliops.authalg, "authenticate header selection: first | last | strong | algorithm-name")
 	flag.StringVar(&cliops.authuser, "au", cliops.authuser, "authentication user")
 	flag.StringVar(&cliops.authuser, "auth-user", cliops.authuser, "authentication user")
 	flag.StringVar(&cliops.body, "mb", cliops.body, "message body")
@@ -991,17 +994,70 @@ func SIPExerEnsureViaAlias(tplfields map[string]any) {
 	tplfields["viaparams"] = vparams + ";alias"
 }
 
-func SIPExerSelectDigestAuthParams(sipRes *sgsip.SGSIPMessage, hname string) map[string]string {
+func SIPExerNormalizeDigestAlg(alg string) string {
+	a := strings.ToLower(strings.TrimSpace(alg))
+	if strings.HasSuffix(a, "-sess") {
+		a = strings.TrimSuffix(a, "-sess")
+	}
+	return a
+}
+
+func SIPExerDigestAlgorithmRank(alg string) int {
+	switch SIPExerNormalizeDigestAlg(alg) {
+	case "sha-512-256":
+		return 50
+	case "sha-256":
+		return 40
+	case "md5":
+		return 10
+	default:
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(alg)), "akav1-") {
+			return 60
+		}
+		return 0
+	}
+}
+
+func SIPExerSelectDigestAuthParams(sipRes *sgsip.SGSIPMessage, hname string, mode string) map[string]string {
+	challenges := make([]map[string]string, 0, 4)
 	for _, h := range sipRes.Headers {
 		if !strings.EqualFold(h.Name, hname) {
 			continue
 		}
 		params := sgsip.SGSIPHeaderParseDigestAuthBody(h.Body)
 		if params != nil {
-			return params
+			challenges = append(challenges, params)
 		}
 	}
-	return nil
+	if len(challenges) == 0 {
+		return nil
+	}
+
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "first":
+		return challenges[0]
+	case "last":
+		return challenges[len(challenges)-1]
+	case "strong":
+		bestIdx := 0
+		bestRank := SIPExerDigestAlgorithmRank(challenges[0]["algorithm"])
+		for i := 1; i < len(challenges); i++ {
+			r := SIPExerDigestAlgorithmRank(challenges[i]["algorithm"])
+			if r > bestRank {
+				bestRank = r
+				bestIdx = i
+			}
+		}
+		return challenges[bestIdx]
+	default:
+		want := SIPExerNormalizeDigestAlg(mode)
+		for _, p := range challenges {
+			if SIPExerNormalizeDigestAlg(p["algorithm"]) == want {
+				return p
+			}
+		}
+		return nil
+	}
 }
 
 type SIPExerRuntimeState struct {
@@ -1936,15 +1992,15 @@ func SIPExerProcessResponse(msgVal *sgsip.SGSIPMessage, rmsg []byte, sipRes *sgs
 		}
 		hparams := map[string]string(nil)
 		if sipRes.FLine.Code == 401 {
-			hparams = SIPExerSelectDigestAuthParams(sipRes, "WWW-Authenticate")
+			hparams = SIPExerSelectDigestAuthParams(sipRes, "WWW-Authenticate", cliops.authalg)
 			if hparams == nil {
-				SIPExerPrintf(SIPExerLogError, "failed to get WWW-Authenticate\n")
+				SIPExerPrintf(SIPExerLogError, "failed to select WWW-Authenticate (auth-alg=%s)\n", cliops.authalg)
 				return SIPExerErrHeaderAuthGet
 			}
 		} else {
-			hparams = SIPExerSelectDigestAuthParams(sipRes, "Proxy-Authenticate")
+			hparams = SIPExerSelectDigestAuthParams(sipRes, "Proxy-Authenticate", cliops.authalg)
 			if hparams == nil {
-				SIPExerPrintf(SIPExerLogError, "failed to get Proxy-Authenticate\n")
+				SIPExerPrintf(SIPExerLogError, "failed to select Proxy-Authenticate (auth-alg=%s)\n", cliops.authalg)
 				return SIPExerErrHeaderAuthGet
 			}
 		}
