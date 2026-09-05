@@ -53,22 +53,47 @@ func SGHashSHA512(input string) string {
 
 // SGHashX - return a lower-case hex of the hashed parameter
 func SGHashX(sAlg string, sData string) string {
-	sHash := ""
-	switch strings.ToLower(strings.Replace(sAlg, "-", "", 2)) {
-	case "md5":
-		sHash = SGHashMD5(sData)
-	case "sha1":
-		sHash = SGHashSHA1(sData)
-	case "sha256":
-		sHash = SGHashSHA256(sData)
-	case "sha512256":
-		sHash = SGHashSHA512_256(sData)
-	case "sha512":
-		sHash = SGHashSHA512(sData)
+	return SGHashBytes(sAlg, []byte(sData))
+}
+
+func sgHashAlgorithmName(algorithm string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(algorithm)), "-", "")
+}
+
+func sgHashAlgorithmSupported(algorithm string) bool {
+	switch sgHashAlgorithmName(algorithm) {
+	case "md5", "sha1", "sha256", "sha512256", "sha512":
+		return true
 	default:
-		sHash = SGHashMD5(sData)
+		return false
 	}
-	return sHash
+}
+
+func sgSplitSessionAlgorithm(algorithm string) (string, bool) {
+	algorithm = strings.TrimSpace(algorithm)
+	if strings.HasSuffix(strings.ToLower(algorithm), "-sess") {
+		return algorithm[:len(algorithm)-len("-sess")], true
+	}
+	return algorithm, false
+}
+
+// SGHashBytes computes a lower-case hex digest, or returns an empty string for
+// an unsupported algorithm.
+func SGHashBytes(vAlg string, vData []byte) string {
+	switch sgHashAlgorithmName(vAlg) {
+	case "md5":
+		return fmt.Sprintf("%x", md5.Sum(vData))
+	case "sha1":
+		return fmt.Sprintf("%x", sha1.Sum(vData))
+	case "sha256":
+		return fmt.Sprintf("%x", sha256.Sum256(vData))
+	case "sha512256":
+		return fmt.Sprintf("%x", sha512.Sum512_256(vData))
+	case "sha512":
+		return fmt.Sprintf("%x", sha512.Sum512(vData))
+	default:
+		return ""
+	}
 }
 
 // SGClientNonce generates a client nonce
@@ -98,11 +123,10 @@ func SGAuthBuildResponseBody(username string, password string, ha1mode bool, hpa
 	if !ok {
 		vAlgHdr = "MD5"
 	}
-	vAlg := vAlgHdr
-	vSess := false
-	if strings.HasSuffix(strings.ToLower(vAlg), "-sess") {
-		vAlg = strings.TrimSuffix(vAlg, "-sess")
-		vSess = true
+	vAlgHdr = strings.TrimSpace(vAlgHdr)
+	vAlg, vSess := sgSplitSessionAlgorithm(vAlgHdr)
+	if !sgHashAlgorithmSupported(vAlg) {
+		return "", fmt.Errorf("unsupported digest algorithm: %s", vAlgHdr)
 	}
 	vQop, ok := hparams["qop"]
 	if !ok {
@@ -414,17 +438,6 @@ func SGAKAComputeF2345(K, OP, OPC, RAND []byte) (res, ck, ik, ak []byte, errv er
 	return res, ck, ik, ak, nil
 }
 
-// SGHashBytes compute hash of data
-func SGHashBytes(vAlg string, vData []byte) string {
-	if vAlg == "md5" {
-		return fmt.Sprintf("%x", md5.Sum(vData))
-	} else if vAlg == "sha256" {
-		return fmt.Sprintf("%x", sha256.Sum256(vData))
-	} else {
-		return fmt.Sprintf("%x", md5.Sum(vData))
-	}
-}
-
 // SGAKAHandleChallenge processes the authentication challenge from the server
 func SGAKAHandleChallenge(username string, key, op, opc, amf []byte, challengeParams map[string]string) (string, error) {
 	var uri, nonce, realm, method, qop string
@@ -442,15 +455,12 @@ func SGAKAHandleChallenge(username string, key, op, opc, amf []byte, challengePa
 		return "", errors.New("missing required parameters in challenge")
 	}
 
-	vAlg := ""
-	vSess := false
-	if strings.HasSuffix(challengeParams["algorithm"], "-sess") {
-		vSess = true
-		vAlg = strings.TrimSuffix(challengeParams["algorithm"], "-sess")
-	} else {
-		vAlg = challengeParams["algorithm"]
+	vAlgHdr := strings.TrimSpace(challengeParams["algorithm"])
+	vAlg, vSess := sgSplitSessionAlgorithm(vAlgHdr)
+	vAlg = sgHashAlgorithmName(strings.TrimPrefix(strings.ToLower(vAlg), "akav1-"))
+	if vAlg != "md5" && vAlg != "sha256" {
+		return "", fmt.Errorf("unsupported AKA digest algorithm: %s", vAlgHdr)
 	}
-	vAlg = strings.TrimPrefix(strings.ToLower(vAlg), "akav1")
 
 	rand, autn, err := SGAKAParseNonce(nonce)
 	if err != nil {
