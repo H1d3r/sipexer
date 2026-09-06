@@ -34,8 +34,8 @@ func TestHashHelpers(t *testing.T) {
 	if got := SGHashX("sha-256", input); got != SGHashSHA256(input) {
 		t.Fatalf("SGHashX sha-256 mismatch: %s", got)
 	}
-	if got := SGHashX("unknown", input); got != SGHashMD5(input) {
-		t.Fatalf("SGHashX fallback mismatch: %s", got)
+	if got := SGHashX("unknown", input); got != "" {
+		t.Fatalf("SGHashX should reject an unsupported algorithm, got: %s", got)
 	}
 
 	if got := SGHashBytes("md5", []byte(input)); got != SGHashMD5(input) {
@@ -44,8 +44,11 @@ func TestHashHelpers(t *testing.T) {
 	if got := SGHashBytes("sha256", []byte(input)); got != SGHashSHA256(input) {
 		t.Fatalf("SGHashBytes sha256 mismatch: %s", got)
 	}
-	if got := SGHashBytes("unsupported", []byte(input)); got != SGHashMD5(input) {
-		t.Fatalf("SGHashBytes fallback mismatch: %s", got)
+	if got := SGHashBytes("SHA-512-256", []byte(input)); got != SGHashSHA512_256(input) {
+		t.Fatalf("SGHashBytes sha-512-256 mismatch: %s", got)
+	}
+	if got := SGHashBytes("unsupported", []byte(input)); got != "" {
+		t.Fatalf("SGHashBytes should reject an unsupported algorithm, got: %s", got)
 	}
 }
 
@@ -161,6 +164,26 @@ func TestSGAuthBuildResponseBody(t *testing.T) {
 	}
 	if !strings.Contains(body, `qop=auth`) {
 		t.Fatalf("expected qop=auth for qop list, got: %s", body)
+	}
+
+	hparams["algorithm"] = "unknown"
+	if _, err = SGAuthBuildResponseBody("alice", "secret", false, hparams); err == nil {
+		t.Fatal("expected unsupported digest algorithm error")
+	}
+
+	hparams["algorithm"] = "SHA-256-SESS"
+	body, err = SGAuthBuildResponseBody("alice", "secret", false, hparams)
+	if err != nil {
+		t.Fatalf("expected mixed-case session algorithm to be supported: %v", err)
+	}
+	params := SGSIPHeaderParseDigestAuthBody(body)
+	cnonce := params["cnonce"]
+	ha1 = SGHashSHA256("alice:example.com:secret")
+	ha1 = SGHashSHA256(ha1 + ":n123:" + cnonce)
+	ha2 := SGHashSHA256("REGISTER:sip:example.com")
+	want := SGHashSHA256(ha1 + ":n123:00000001:" + cnonce + ":auth:" + ha2)
+	if params["response"] != want {
+		t.Fatalf("mixed-case SHA-256-SESS response = %q, want %q", params["response"], want)
 	}
 }
 
@@ -345,6 +368,30 @@ func TestSGAKAHandleChallenge(t *testing.T) {
 		t.Fatalf("expected ck/ik to be set as hex strings, ck=%q ik=%q", ch["ck"], ch["ik"])
 	}
 
+	chSess := buildValidAKAChallenge(t, key, op, amf)
+	chSess["algorithm"] = "AKAv1-SHA-256-SESS"
+	h, err = SGAKAHandleChallenge("alice", key, op, nil, amf, chSess)
+	if err != nil {
+		t.Fatalf("expected mixed-case AKA session algorithm to be supported: %v", err)
+	}
+	params := SGSIPHeaderParseDigestAuthBody(h)
+	rand, _, err := SGAKAParseNonce(chSess["nonce"])
+	if err != nil {
+		t.Fatalf("failed to parse test AKA nonce: %v", err)
+	}
+	res, _, _, _, err := SGAKAComputeF2345(key, op, nil, rand)
+	if err != nil {
+		t.Fatalf("failed to compute test AKA response: %v", err)
+	}
+	cnonce := params["cnonce"]
+	ha1 := SGHashBytes("sha256", append([]byte("alice:example.com:"), res...))
+	ha1 = SGHashSHA256(ha1 + ":" + chSess["nonce"] + ":" + cnonce)
+	ha2 := SGHashSHA256("REGISTER:sip:example.com")
+	want := SGHashSHA256(ha1 + ":" + chSess["nonce"] + ":00000001:" + cnonce + ":auth:" + ha2)
+	if params["response"] != want {
+		t.Fatalf("mixed-case AKA SHA-256-SESS response = %q, want %q", params["response"], want)
+	}
+
 	if _, err = SGAKAHandleChallenge("alice", key, op, nil, amf, map[string]string{}); err == nil {
 		t.Fatalf("expected missing params error")
 	}
@@ -386,5 +433,11 @@ func TestSGAKAHandleChallenge(t *testing.T) {
 	chBadOPC := buildValidAKAChallenge(t, key, op, amf)
 	if _, err = SGAKAHandleChallenge("alice", key, nil, make([]byte, 15), amf, chBadOPC); err == nil {
 		t.Fatalf("expected invalid OPC length error")
+	}
+
+	chBadAlgorithm := buildValidAKAChallenge(t, key, op, amf)
+	chBadAlgorithm["algorithm"] = "AKAv1-unknown"
+	if _, err = SGAKAHandleChallenge("alice", key, op, nil, amf, chBadAlgorithm); err == nil {
+		t.Fatalf("expected unsupported AKA digest algorithm error")
 	}
 }
