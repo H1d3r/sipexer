@@ -368,14 +368,17 @@ func TestSGAKAHandleChallenge(t *testing.T) {
 		t.Fatalf("expected ck/ik to be set as hex strings, ck=%q ik=%q", ch["ck"], ch["ik"])
 	}
 
-	chSess := buildValidAKAChallenge(t, key, op, amf)
-	chSess["algorithm"] = "AKAv1-SHA-256-SESS"
-	h, err = SGAKAHandleChallenge("alice", key, op, nil, amf, chSess)
+	chQopList := buildValidAKAChallenge(t, key, op, amf)
+	chQopList["qop"] = "auth,auth-int"
+	h, err = SGAKAHandleChallenge("alice", key, op, nil, amf, chQopList)
 	if err != nil {
-		t.Fatalf("expected mixed-case AKA session algorithm to be supported: %v", err)
+		t.Fatalf("unexpected AKA qop-list error: %v", err)
 	}
 	params := SGSIPHeaderParseDigestAuthBody(h)
-	rand, _, err := SGAKAParseNonce(chSess["nonce"])
+	if params["qop"] != "auth" {
+		t.Fatalf("AKA qop-list selected %q, want auth", params["qop"])
+	}
+	rand, _, err := SGAKAParseNonce(chQopList["nonce"])
 	if err != nil {
 		t.Fatalf("failed to parse test AKA nonce: %v", err)
 	}
@@ -383,11 +386,49 @@ func TestSGAKAHandleChallenge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to compute test AKA response: %v", err)
 	}
+	ha1 := SGHashBytes("md5", append([]byte("alice:example.com:"), res...))
+	ha2 := SGHashMD5("REGISTER:sip:example.com")
+	want := SGHashMD5(ha1 + ":" + chQopList["nonce"] + ":00000001:" + params["cnonce"] + ":auth:" + ha2)
+	if params["response"] != want {
+		t.Fatalf("AKA qop-list response = %q, want %q", params["response"], want)
+	}
+
+	chNoQop := buildValidAKAChallenge(t, key, op, amf)
+	delete(chNoQop, "qop")
+	h, err = SGAKAHandleChallenge("alice", key, op, nil, amf, chNoQop)
+	if err != nil {
+		t.Fatalf("unexpected AKA no-qop error: %v", err)
+	}
+	params = SGSIPHeaderParseDigestAuthBody(h)
+	ha1 = SGHashBytes("md5", append([]byte("alice:example.com:"), res...))
+	want = SGHashMD5(ha1 + ":" + chNoQop["nonce"] + ":" + ha2)
+	if params["response"] != want {
+		t.Fatalf("AKA no-qop response = %q, want %q", params["response"], want)
+	}
+	if params["qop"] != "" || params["nc"] != "" || params["cnonce"] != "" {
+		t.Fatalf("AKA no-qop header contains qop fields: %s", h)
+	}
+
+	chSess := buildValidAKAChallenge(t, key, op, amf)
+	chSess["algorithm"] = "AKAv1-SHA-256-SESS"
+	h, err = SGAKAHandleChallenge("alice", key, op, nil, amf, chSess)
+	if err != nil {
+		t.Fatalf("expected mixed-case AKA session algorithm to be supported: %v", err)
+	}
+	params = SGSIPHeaderParseDigestAuthBody(h)
+	rand, _, err = SGAKAParseNonce(chSess["nonce"])
+	if err != nil {
+		t.Fatalf("failed to parse test AKA nonce: %v", err)
+	}
+	res, _, _, _, err = SGAKAComputeF2345(key, op, nil, rand)
+	if err != nil {
+		t.Fatalf("failed to compute test AKA response: %v", err)
+	}
 	cnonce := params["cnonce"]
-	ha1 := SGHashBytes("sha256", append([]byte("alice:example.com:"), res...))
+	ha1 = SGHashBytes("sha256", append([]byte("alice:example.com:"), res...))
 	ha1 = SGHashSHA256(ha1 + ":" + chSess["nonce"] + ":" + cnonce)
-	ha2 := SGHashSHA256("REGISTER:sip:example.com")
-	want := SGHashSHA256(ha1 + ":" + chSess["nonce"] + ":00000001:" + cnonce + ":auth:" + ha2)
+	ha2 = SGHashSHA256("REGISTER:sip:example.com")
+	want = SGHashSHA256(ha1 + ":" + chSess["nonce"] + ":00000001:" + cnonce + ":auth:" + ha2)
 	if params["response"] != want {
 		t.Fatalf("mixed-case AKA SHA-256-SESS response = %q, want %q", params["response"], want)
 	}
