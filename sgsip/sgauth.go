@@ -77,6 +77,29 @@ func sgSplitSessionAlgorithm(algorithm string) (string, bool) {
 	return algorithm, false
 }
 
+func sgSelectDigestQop(qop string, present bool) (string, error) {
+	if !present || strings.TrimSpace(qop) == "" {
+		return "none", nil
+	}
+
+	selected := "none"
+	for _, candidate := range strings.Split(strings.ToLower(qop), ",") {
+		switch strings.TrimSpace(candidate) {
+		case "auth":
+			return "auth", nil
+		case "auth-int":
+			selected = "auth-int"
+		case "none":
+		default:
+			continue
+		}
+	}
+	if selected != "none" || strings.EqualFold(strings.TrimSpace(qop), "none") {
+		return selected, nil
+	}
+	return "", fmt.Errorf("unsupported qop value: %s", qop)
+}
+
 // SGHashBytes computes a lower-case hex digest, or returns an empty string for
 // an unsupported algorithm.
 func SGHashBytes(vAlg string, vData []byte) string {
@@ -128,30 +151,10 @@ func SGAuthBuildResponseBody(username string, password string, ha1mode bool, hpa
 	if !sgHashAlgorithmSupported(vAlg) {
 		return "", fmt.Errorf("unsupported digest algorithm: %s", vAlgHdr)
 	}
-	vQop, ok := hparams["qop"]
-	if !ok {
-		vQop = "none"
-	} else {
-		vQop = strings.ToLower(strings.TrimSpace(vQop))
-		if strings.Contains(vQop, ",") {
-			// Server can advertise multiple qop values (e.g. "auth,auth-int").
-			// Pick the first supported value, preferring auth then auth-int.
-			qopList := strings.Split(vQop, ",")
-			vQop = "none"
-			for _, qv := range qopList {
-				qv = strings.TrimSpace(qv)
-				if qv == "auth" {
-					vQop = "auth"
-					break
-				}
-				if qv == "auth-int" && vQop != "auth" {
-					vQop = "auth-int"
-				}
-			}
-		}
-	}
-	if vQop != "none" && vQop != "auth" && vQop != "auth-int" {
-		return "", fmt.Errorf("unsupported qop value: %s", vQop)
+	vQopRaw, qopPresent := hparams["qop"]
+	vQop, err := sgSelectDigestQop(vQopRaw, qopPresent)
+	if err != nil {
+		return "", err
 	}
 	sHA1 := ""
 	if ha1mode {
@@ -440,12 +443,12 @@ func SGAKAComputeF2345(K, OP, OPC, RAND []byte) (res, ck, ik, ak []byte, errv er
 
 // SGAKAHandleChallenge processes the authentication challenge from the server
 func SGAKAHandleChallenge(username string, key, op, opc, amf []byte, challengeParams map[string]string) (string, error) {
-	var uri, nonce, realm, method, qop string
+	var uri, nonce, realm, method string
 
 	nonce = challengeParams["nonce"]
 	realm = challengeParams["realm"]
 	method = challengeParams["method"]
-	qop = challengeParams["qop"]
+	qopRaw, qopPresent := challengeParams["qop"]
 	if _, ok := challengeParams["uri"]; ok {
 		uri = challengeParams["uri"]
 	} else {
@@ -453,6 +456,10 @@ func SGAKAHandleChallenge(username string, key, op, opc, amf []byte, challengePa
 	}
 	if nonce == "" || realm == "" {
 		return "", errors.New("missing required parameters in challenge")
+	}
+	qop, err := sgSelectDigestQop(qopRaw, qopPresent)
+	if err != nil {
+		return "", err
 	}
 
 	vAlgHdr := strings.TrimSpace(challengeParams["algorithm"])
@@ -514,14 +521,40 @@ func SGAKAHandleChallenge(username string, key, op, opc, amf []byte, challengePa
 	a2w.WriteString(method)
 	a2w.WriteRune(':')
 	a2w.WriteString(uri)
+	if qop == "auth-int" {
+		a2w.WriteRune(':')
+		a2w.WriteString(SGHashX(vAlg, challengeParams["body"]))
+	}
 
 	ha2 := SGHashBytes(vAlg, a2w.Bytes())
+
+	if qop == "none" {
+		authres := SGHashX(vAlg, ha1+":"+nonce+":"+ha2)
+		cnonceParam := ""
+		if vSess {
+			cnonceParam = fmt.Sprintf(",\n                 cnonce=\"%s\"", cnonce)
+		}
+		authHeader := fmt.Sprintf(`Digest username="%s",
+                 realm="%s",
+                 uri="%s",
+                 algorithm=%s,
+                 nonce="%s"%s,
+                 response="%s"`,
+			username,
+			realm,
+			uri,
+			challengeParams["algorithm"],
+			nonce,
+			cnonceParam,
+			authres,
+		)
+		return authHeader, nil
+	}
 
 	nc := fmt.Sprintf("%08x", 1)
 	if len(cnonce) == 0 {
 		cnonce = SGCreateClientNonce(8)
 	}
-
 	a3b := make([]byte, 0, len(ha1)+len(nonce)+len(nc)+len(cnonce)+len(qop)+len(ha2)+5)
 	a3w := bytes.NewBuffer(a3b)
 	a3w.WriteString(ha1)
