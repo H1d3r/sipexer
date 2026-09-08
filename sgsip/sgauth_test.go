@@ -187,6 +187,45 @@ func TestSGAuthBuildResponseBody(t *testing.T) {
 	}
 }
 
+func TestSGAuthBuildResponseBodyEscapesQuotedValues(t *testing.T) {
+	username := `al"ice\admin`
+	hparams := map[string]string{
+		"algorithm": "MD5",
+		"realm":     `say "hello"\realm`,
+		"nonce":     `n"once\value`,
+		"uri":       `sip:example.com;x="y"\z`,
+		"method":    "REGISTER",
+		"qop":       "auth",
+		"opaque":    `o"paque\value`,
+	}
+
+	for _, withQop := range []bool{true, false} {
+		if withQop {
+			hparams["qop"] = "auth"
+		} else {
+			delete(hparams, "qop")
+		}
+		body, err := SGAuthBuildResponseBody(username, "secret", false, hparams)
+		if err != nil {
+			t.Fatalf("unexpected quoted-value error: %v", err)
+		}
+		params := SGSIPHeaderParseDigestAuthBody(body)
+		for name, want := range map[string]string{
+			"username": username,
+			"realm":    hparams["realm"],
+			"nonce":    hparams["nonce"],
+			"uri":      hparams["uri"],
+		} {
+			if params[name] != want {
+				t.Fatalf("%s round trip = %q, want %q; header: %s", name, params[name], want, body)
+			}
+		}
+		if withQop && params["opaque"] != hparams["opaque"] {
+			t.Fatalf("opaque round trip = %q, want %q; header: %s", params["opaque"], hparams["opaque"], body)
+		}
+	}
+}
+
 func TestAKAUtilityFunctions(t *testing.T) {
 	rand := []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
 	autn := []byte{16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}
@@ -480,5 +519,37 @@ func TestSGAKAHandleChallenge(t *testing.T) {
 	chBadAlgorithm["algorithm"] = "AKAv1-unknown"
 	if _, err = SGAKAHandleChallenge("alice", key, op, nil, amf, chBadAlgorithm); err == nil {
 		t.Fatalf("expected unsupported AKA digest algorithm error")
+	}
+}
+
+func TestSGAKAHandleChallengeEscapesQuotedValues(t *testing.T) {
+	key := []byte{0x46, 0x5b, 0x5c, 0xe8, 0xb1, 0x99, 0xb4, 0x9f, 0xaa, 0x5f, 0x0a, 0x2e, 0xe2, 0x38, 0xa6, 0xbc}
+	op := []byte{0xcd, 0xc2, 0x02, 0xd5, 0x12, 0x3e, 0x20, 0xf6, 0x2b, 0x6d, 0x67, 0x6a, 0xc7, 0x2c, 0xb3, 0x18}
+	amf := []byte{0x80, 0x00}
+	username := `al"ice\admin`
+
+	for _, withQop := range []bool{true, false} {
+		challenge := buildValidAKAChallenge(t, key, op, amf)
+		challenge["realm"] = `say "hello"\realm`
+		challenge["uri"] = `sip:example.com;x="y"\z`
+		if !withQop {
+			delete(challenge, "qop")
+		}
+
+		header, err := SGAKAHandleChallenge(username, key, op, nil, amf, challenge)
+		if err != nil {
+			t.Fatalf("unexpected quoted AKA value error: %v", err)
+		}
+		params := SGSIPHeaderParseDigestAuthBody(header)
+		for name, want := range map[string]string{
+			"username": username,
+			"realm":    challenge["realm"],
+			"nonce":    challenge["nonce"],
+			"uri":      challenge["uri"],
+		} {
+			if params[name] != want {
+				t.Fatalf("AKA %s round trip = %q, want %q; header: %s", name, params[name], want, header)
+			}
+		}
 	}
 }
