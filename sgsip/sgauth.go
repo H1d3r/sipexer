@@ -100,6 +100,18 @@ func sgSelectDigestQop(qop string, present bool) (string, error) {
 	return "", fmt.Errorf("unsupported qop value: %s", qop)
 }
 
+func sgEscapeQuotedString(value string) string {
+	var escaped strings.Builder
+	escaped.Grow(len(value))
+	for _, r := range value {
+		if r == '\\' || r == '"' {
+			escaped.WriteByte('\\')
+		}
+		escaped.WriteRune(r)
+	}
+	return escaped.String()
+}
+
 // SGHashBytes computes a lower-case hex digest, or returns an empty string for
 // an unsupported algorithm.
 func SGHashBytes(vAlg string, vData []byte) string {
@@ -177,7 +189,9 @@ func SGAuthBuildResponseBody(username string, password string, ha1mode bool, hpa
 		response := SGHashX(vAlg, sHA1+":"+hparams["nonce"]+":"+sHA2)
 		// build header body
 		AuthHeader = fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", algorithm=%s, response="%s"`,
-			username, hparams["realm"], hparams["nonce"], hparams["uri"], vAlgHdr, response)
+			sgEscapeQuotedString(username), sgEscapeQuotedString(hparams["realm"]),
+			sgEscapeQuotedString(hparams["nonce"]), sgEscapeQuotedString(hparams["uri"]),
+			vAlgHdr, sgEscapeQuotedString(response))
 	} else {
 		if vQop == "auth" {
 			sHA2 = SGHashX(vAlg, hparams["method"]+":"+hparams["uri"])
@@ -196,7 +210,10 @@ func SGAuthBuildResponseBody(username string, password string, ha1mode bool, hpa
 		response := SGHashX(vAlg, sHA1+":"+hparams["nonce"]+":"+nc+":"+cnonce+":"+vQop+":"+sHA2)
 		// build header body
 		AuthHeader = fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", cnonce="%s", nc=%s, qop=%s, opaque="%s", algorithm=%s, response="%s"`,
-			username, hparams["realm"], hparams["nonce"], hparams["uri"], cnonce, nc, vQop, hparams["opaque"], vAlgHdr, response)
+			sgEscapeQuotedString(username), sgEscapeQuotedString(hparams["realm"]),
+			sgEscapeQuotedString(hparams["nonce"]), sgEscapeQuotedString(hparams["uri"]),
+			sgEscapeQuotedString(cnonce), nc, vQop, sgEscapeQuotedString(hparams["opaque"]),
+			vAlgHdr, sgEscapeQuotedString(response))
 	}
 	return AuthHeader, nil
 }
@@ -532,7 +549,7 @@ func SGAKAHandleChallenge(username string, key, op, opc, amf []byte, challengePa
 		authres := SGHashX(vAlg, ha1+":"+nonce+":"+ha2)
 		cnonceParam := ""
 		if vSess {
-			cnonceParam = fmt.Sprintf(",\n                 cnonce=\"%s\"", cnonce)
+			cnonceParam = fmt.Sprintf(",\n                 cnonce=\"%s\"", sgEscapeQuotedString(cnonce))
 		}
 		authHeader := fmt.Sprintf(`Digest username="%s",
                  realm="%s",
@@ -540,13 +557,13 @@ func SGAKAHandleChallenge(username string, key, op, opc, amf []byte, challengePa
                  algorithm=%s,
                  nonce="%s"%s,
                  response="%s"`,
-			username,
-			realm,
-			uri,
+			sgEscapeQuotedString(username),
+			sgEscapeQuotedString(realm),
+			sgEscapeQuotedString(uri),
 			challengeParams["algorithm"],
-			nonce,
+			sgEscapeQuotedString(nonce),
 			cnonceParam,
-			authres,
+			sgEscapeQuotedString(authres),
 		)
 		return authHeader, nil
 	}
@@ -579,15 +596,15 @@ func SGAKAHandleChallenge(username string, key, op, opc, amf []byte, challengePa
                  nc=%s,
                  cnonce="%s",
                  response="%s"`,
-		username,
-		realm,
-		uri,
+		sgEscapeQuotedString(username),
+		sgEscapeQuotedString(realm),
+		sgEscapeQuotedString(uri),
 		challengeParams["algorithm"],
-		nonce,
+		sgEscapeQuotedString(nonce),
 		qop,
 		nc,
-		cnonce,
-		authres,
+		sgEscapeQuotedString(cnonce),
+		sgEscapeQuotedString(authres),
 	)
 
 	return authHeader, nil
