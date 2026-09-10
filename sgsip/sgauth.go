@@ -153,6 +153,11 @@ func SGAuthGetNC(vNC int) string {
 // SGAuthBuildResponseBody - return the body for auth header in response
 func SGAuthBuildResponseBody(username string, password string, ha1mode bool, hparams map[string]string) (string, error) {
 	// https://en.wikipedia.org/wiki/Digest_access_authentication
+	for _, name := range []string{"realm", "nonce", "method", "uri"} {
+		if value, ok := hparams[name]; !ok || value == "" {
+			return "", fmt.Errorf("missing required digest parameter: %s", name)
+		}
+	}
 
 	vAlgHdr, ok := hparams["algorithm"]
 	if !ok {
