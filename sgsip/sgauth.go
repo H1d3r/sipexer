@@ -9,6 +9,7 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -501,7 +502,7 @@ func SGAKAHandleChallenge(username string, key, op, opc, amf []byte, challengePa
 	amfin := autn[6:8]
 	mac := autn[8:16]
 
-	if SGAKACompareBytes(amf, amfin) != 0 {
+	if subtle.ConstantTimeCompare(amf, amfin) != 1 {
 		return "", fmt.Errorf("failed to match amf")
 	}
 
@@ -515,7 +516,7 @@ func SGAKAHandleChallenge(username string, key, op, opc, amf []byte, challengePa
 	if err != nil {
 		return "", fmt.Errorf("failed to xmac: %w", err)
 	}
-	if SGAKACompareBytes(mac, xmac) != 0 {
+	if subtle.ConstantTimeCompare(mac, xmac) != 1 {
 		return "", fmt.Errorf("failed to match xmac")
 	}
 
